@@ -1,0 +1,9 @@
+node_modules/
+screenshots/
+storage-state*.json
+agentscribe-*.js
+agentscribe-*.json
+*.log
+.env
+.DS_Store
+Thumbs.db
