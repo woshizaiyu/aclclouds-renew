@@ -12,7 +12,7 @@
 
 | 名称 | 必填 | 说明 | 示例 |
 |---|---|---|---|
-| `AUTH_STATE` | ✅*1 | Playwright storageState JSON（录制即得，推荐） | 纯 `{...}` JSON |
+| `AUTH_STATE` | ✅*1 |  | 纯 `{...}` JSON |
 | `ACL_EMAIL` | ✅*1 | 账号邮箱（降级登录用） | `your@email.com` |
 | `ACL_PASSWORD` | ✅*1 | 账号密码 | `***` |
 | `SERVER_PAGE_URL` | ✅ | 服务器页完整 URL，多个换行/逗号分隔 | `https://aclclouds.com/server/YOUR_SERVER_ID` |
