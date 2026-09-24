@@ -62,7 +62,8 @@ const CFG = {
   repo: env('GITHUB_REPOSITORY'),
   tgToken: env('TG_BOT_TOKEN'),
   tgChatId: env('TG_CHAT_ID'),
-  proxyUrl: env('PROXY_URL'),
+  // 代理地址：显式 PROXY_URL 优先，否则取 sing-box 脚本写入的 IS_PROXY/PROXY_SERVER
+  proxyUrl: env('PROXY_URL') || (env('IS_PROXY').toLowerCase() === 'true' ? env('PROXY_SERVER') : ''),
   headless: bool('HEADLESS', true),
   dryRun: bool('DRY_RUN', false),
   timezone: env('TIMEZONE', 'Asia/Shanghai'),

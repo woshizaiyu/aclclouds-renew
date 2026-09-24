@@ -32,7 +32,7 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: ⚙️ 部署 sing-box 代理
-        if: ${{ secrets.NODE_LINK != '' }}
+        # 注：if 里不能用 secrets 上下文；无 NODE_LINK 时脚本自行直连退出
         continue-on-error: true
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
@@ -63,7 +63,6 @@ jobs:
           LOCALE: en-US
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PROXY_URL: ${{ env.IS_PROXY == 'true' && env.PROXY_SERVER || '' }}
         run: npm start
 
       - name: ☁️ 上传截图与日志

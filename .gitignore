@@ -1,6 +1,7 @@
 node_modules/
 screenshots/
 storage-state*.json
+slim-storage-state.json
 agentscribe-*.js
 agentscribe-*.json
 *.log

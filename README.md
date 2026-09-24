@@ -24,7 +24,8 @@
 
 > *1：`AUTH_STATE` 与 `ACL_EMAIL+ACL_PASSWORD` 二选一，优先 `AUTH_STATE`。
 >
-> 取法：打开 `agentscribe-playwright-*.js`，复制 `storageState: { "cookies": [...6 个...], "origins": [...] }` 整个 `{...}`（去掉头上 `storageState:` 前缀），粘贴为 Secret 值。脚本也接受 base64 后的值。
+> 取法（推荐）：直接用本目录 `slim-storage-state.json` 全文（2.2KB，已砍掉 localStorage 里几十 KB 的商品目录缓存，仅留 6 个认证 cookie），粘贴为 Secret 值。脚本也接受 base64 后的值。
+> 若手工取：打开 `agentscribe-playwright-*.js` 复制 `storageState` 的 `{...}`，但必须删掉 `origins[0].localStorage` 里巨大的 `aclclouds:public-pricing:v1` 项，否则超 GitHub Secret 大小限制。
 > 关键 cookie 共 6 个，缺一不可：
 >
 > | Cookie | 作用 | 备注 |
