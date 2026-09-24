@@ -135,14 +135,24 @@ async function gotoRetry(page, url, opts = {}, retries = 3) {
   throw last;
 }
 
-/** 原生 https 发 TG 通知（不引额外依赖） */
+/** 邮箱脱敏（佬王 HidenCloud 风格：保留前后2位） */
+function maskEmail() {
+  const e = CFG.email || '';
+  if (e.includes('@')) {
+    const [name, domain] = e.split('@', 2);
+    return name.length > 4 ? `${name.slice(0, 2)}****${name.slice(-2)}@${domain}` : `${name}@${domain}`;
+  }
+  return e ? `${e.slice(0, 2)}****` : 'AUTH_STATE登录';
+}
+
+/** 原生 https 发 TG 通知（佬王风格：parse_mode HTML，直发无降级） */
 function sendTelegram(text) {
   return new Promise((resolve) => {
     if (!CFG.tgToken || !CFG.tgChatId) {
       log('⚠️ 未配置 TG_BOT_TOKEN / TG_CHAT_ID，跳过通知');
       return resolve(false);
     }
-    const data = JSON.stringify({ chat_id: CFG.tgChatId, text });
+    const data = JSON.stringify({ chat_id: CFG.tgChatId, text, parse_mode: 'HTML' });
     const req = https.request({
       hostname: 'api.telegram.org',
       path: `/bot${CFG.tgToken}/sendMessage`,
@@ -470,15 +480,23 @@ async function doLogin(page) {
 
 /* ============================== 汇报 ============================== */
 
+/** TG 报告（佬王 HidenCloud 风格）：标题 + 状态 + 账号 + 前后到期时间 */
 async function reportResults(results) {
   results.sort((a, b) => a.idx - b.idx);
+  const STATUS = { SUCCESS: '✅ 续期成功', PENDING: '⏳ 未到续期时间', NO_BUTTON: '❌ 未找到按钮', FAIL: '❌ 续期失败' };
   const ICON = { SUCCESS: '🟢', PENDING: '⚪', NO_BUTTON: '🟡', FAIL: '🔴' };
-  const LABEL = { SUCCESS: '续期成功', PENDING: '无需续期', NO_BUTTON: '未找到按钮', FAIL: '失败' };
-  const lines = results.map((r) =>
-    `${ICON[r.status] || '❔'} <b>[${r.idx}/${r.total}] ${r.id}</b>\n   ${LABEL[r.status] || r.status}` +
-    `${r.before ? ` | ${r.before}${r.after ? ` ➔ ${r.after}` : ''}` : ''}${r.note ? `\n   └ ${r.note}` : ''}`);
-  const sum = `🖥 <b>ACLClouds 自动续期报告</b>\n\n${lines.join('\n')}\n\n<b>门控</b> can_renew 布尔 · <b>周期</b> 4天免费档\n<b>时间</b> ${nowStr()}`;
-  await sendTelegram(sum);
+  const lines = ['🎰 ACLClouds 续期报告', ''];
+  for (const r of results) {
+    lines.push(STATUS[r.status] || r.status);
+    lines.push(`📧 账号: ${maskEmail()}`);
+    lines.push(`🖥 服务器: ${r.id}`);
+    if (r.before) lines.push(`⏱ 续期前到期时间:${r.before}`);
+    if (r.after) lines.push(`⏱ 续期后到期时间:${r.after}`);
+    if (r.note) lines.push(`📝 ${r.note}`);
+    lines.push('');
+  }
+  lines.push(`⏱ 时间: ${nowStr()}`);
+  await sendTelegram(lines.join('\n'));
   console.log('\n================ 汇总 ================');
   results.forEach((r) => console.log(`${ICON[r.status]} [${r.idx}/${r.total}] ${r.id} ${r.before}${r.after ? ' ➔ ' + r.after : ''} ${r.note}`));
   const fails = results.filter((r) => r.status === 'FAIL').length;
@@ -609,6 +627,6 @@ async function reportResults(results) {
   await reportResults(results);
 })().catch(async (e) => {
   console.error('❌ 全局致命错误:', e.message);
-  await sendTelegram(`🚨 <b>ACLClouds 运行异常</b>\n<code>${String(e.message).slice(0, 200)}</code>\n⏱ ${nowStr()}`);
+  await sendTelegram(`🚨 ACLClouds 运行异常\n${String(e.message).slice(0, 200)}\n⏱ ${nowStr()}`);
   process.exit(1);
 });
