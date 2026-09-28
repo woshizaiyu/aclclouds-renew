@@ -405,12 +405,28 @@ async function renewOneServer(context, url, idx, total, liveState) {
     }
     await sleep(2000);
 
-    // 确认弹窗（若有）
-    const modal = page.locator('[role="dialog"], div.modal.show').last();
+    // 确认弹窗（若有）：先枚举弹窗内按钮并打文案，再启发式点确认
+    const modal = page.locator('[role="dialog"], div.modal.show, .modal, [class*="modal"]').last();
     try {
       await modal.waitFor({ state: 'visible', timeout: 8000 });
-      const ok = await clickByText(modal, ['Renew', 'Confirm', 'Yes', 'Continue', 'Submit'], { timeout: 1200 });
-      if (!ok) await clickByText(page.locator('body'), ['Confirm', 'Yes'], { timeout: 1000 }).catch(() => false);
+      log('🪟 已探测到确认弹窗');
+      let btns = [];
+      try {
+        btns = await modal.locator('button, a, [role="button"], input[type="submit"]').all();
+      } catch { /* ignore */ }
+      const labels = [];
+      for (const b of btns) {
+        try {
+          if (await b.isVisible({ timeout: 500 })) {
+            const t = ((await b.innerText().catch(() => '')) || (await b.getAttribute('value').catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+            if (t) labels.push(t);
+          }
+        } catch { /* ignore */ }
+      }
+      log(`📝 弹窗按钮: ${labels.length ? JSON.stringify(labels) : '（空）'}`);
+      await safeShot(page, `server-${idx}-modal.png`);
+      const ok = await clickByText(modal, ['Renew', 'Confirm', 'Yes', 'Continue', 'Submit', 'OK'], { timeout: 1200 });
+      if (!ok) await clickByText(page.locator('body'), ['Confirm', 'Yes', 'OK'], { timeout: 1000 }).catch(() => false);
     } catch { log('ℹ️ 无独立确认弹窗，继续'); }
     await sleep(5000);
 
