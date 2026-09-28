@@ -6,7 +6,7 @@ Node.js 18 + Playwright + GitHub Actions。远端：`https://github.com/woshizai
 ## 目录
 
 - `renew.js` — 唯一脚本：API 预检 + 浏览器续期 + TG 报告
-- `.github/workflows/renew.yml` — CI：巡检 `10 */12 * * *`，无 npm cache（无 lockfile）
+- `.github/workflows/renew.yml` — CI：首次 24h 巡检 `10 10 * * *`，续期成功后脚本自动改写 cron（oyz/FreezeHost 式自我调度，见核心设计5）；无 npm cache（无 lockfile）
 - `package.json` / `README.md` / `.gitignore`
 - 本地仅有（绝不提交）：`agentscribe-*.js/json`（录制，含真实 cookie）、`slim-storage-state.json`（2.2KB 精简登录态）、`screenshots/`
 
@@ -16,6 +16,7 @@ Node.js 18 + Playwright + GitHub Actions。远端：`https://github.com/woshizai
 2. 认证是 session-cookie（Laravel 系）：`remember_web_*` + `__Host-aclclouds_session` + `XSRF-TOKEN` 三件套；API 请求头 `X-XSRF-TOKEN = decodeURIComponent(XSRF cookie)`，另带 `X-Requested-With: XMLHttpRequest`。见 `apiServerDetail`（请求头复刻自录制 session 461bb59b）。
 3. 真实续期按钮选择器未知（录制时 `can_renew=false` 没点到），`renewOneServer` 用文案泛匹配 Renew/Confirm/Yes。若报 `NO_BUTTON`，需 `can_renew=true` 时补录制。
 4. 代理：`NODE_LINK` → workflow 起 sing-box → 脚本读 `IS_PROXY`/`PROXY_SERVER`，TCP 探测 1080，不通自动直连。不配即直连。
+5. cron 自我调度（参考 `oyz/FreezeHost`，`updateCronSchedule`）：SUCCESS 后按 `after(expires_at)-1天` 把 `renew.yml` 的 cron 改写为一次性定时（`10 10 D M *` + `# auto: 下一次 ... UTC` 注释）并 `pull --rebase` 后 push；解析失败/已过期则 12h 后兜底；仅 CI 内跑，失败只告警不影响本次结果。`GH_TOKEN` 必须是带 `repo`+`workflow` 作用域的 classic PAT（默认 `GITHUB_TOKEN` 推不了 workflow 文件）。
 
 ## 常用命令
 

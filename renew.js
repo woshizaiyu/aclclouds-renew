@@ -363,6 +363,57 @@ async function updateGithubSecret(name, value) {
 }
 
 /**
+ * cron 回写（参考 oyz/FreezeHost）：续期成功后按 expires_at-1天 改写
+ * .github/workflows/renew.yml 的 cron 行为一次性定时并 push，下次到期前才唤醒。
+ * 注意：默认 GITHUB_TOKEN 推不了 workflow 文件，GH_TOKEN 必须是带 workflow 作用域的 PAT。
+ */
+async function updateCronSchedule(afterExpiresAt) {
+  if (CFG.dryRun) { log('ℹ️ DRY_RUN 演练，跳过 cron 回写'); return false; }
+  if (!process.env.GITHUB_ACTIONS) { log('ℹ️ 非 CI 环境，跳过 cron 回写'); return false; }
+  if (!CFG.ghToken || !CFG.repo) { log('ℹ️ 未提供 GH_TOKEN/GITHUB_REPOSITORY，跳过 cron 回写'); return false; }
+  const t = Date.parse(afterExpiresAt);
+  if (!Number.isFinite(t)) { log(`⚠️ expires_at 不可解析(${afterExpiresAt})，跳过 cron 回写`); return false; }
+  let next = new Date(t - 24 * 3600 * 1000); // 到期前 1 天
+  if (next.getTime() <= Date.now()) next = new Date(Date.now() + 12 * 3600 * 1000); // 兜底 12h 后
+  const p2 = (n) => String(n).padStart(2, '0');
+  const newCron = `10 10 ${next.getUTCDate()} ${next.getUTCMonth() + 1} *`; // 一次性 cron，下次成功后续写
+  const nextStr = `${next.getUTCFullYear()}-${p2(next.getUTCMonth() + 1)}-${p2(next.getUTCDate())} ${p2(next.getUTCHours())}:${p2(next.getUTCMinutes())}`;
+  const wf = path.join(process.cwd(), '.github', 'workflows', 'renew.yml');
+  if (!fs.existsSync(wf)) { log('⚠️ 找不到 renew.yml，跳过 cron 回写'); return false; }
+  const old = fs.readFileSync(wf, 'utf8');
+  const re = /^(\s*- cron: )'[^']*'(.*)$/m;
+  const m = old.match(re);
+  if (!m) { log('⚠️ renew.yml 无 cron 行，跳过 cron 回写'); return false; }
+  const updated = old.replace(re, `${m[1]}'${newCron}'  # auto: 下一次 ${nextStr} UTC`);
+  if (updated === old) { log('ℹ️ cron 无变化，跳过提交'); return false; }
+  fs.writeFileSync(wf, updated);
+  log(`📅 cron 回写: ${m[0].trim()} ➔ ${updated.match(re)[0].trim()}`);
+  try {
+    const { execFile } = require('child_process');
+    const run = (args) => new Promise((resolve, reject) => {
+      execFile('git', args, { cwd: process.cwd(), timeout: 60000 },
+        (err, so, se) => (err ? reject(new Error(se || err.message)) : resolve(so)));
+    });
+    await run(['pull', '--rebase']);
+    await run(['config', 'user.name', 'github-actions[bot]']);
+    await run(['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+    await run(['add', '.github/workflows/renew.yml']);
+    if (!(await run(['status', '--porcelain', '.github/workflows/renew.yml'])).trim()) {
+      log('ℹ️ rebase 后 cron 无变化，跳过提交'); return false;
+    }
+    const [owner, repo] = CFG.repo.split('/');
+    await run(['commit', '-m', '自动调整下次续期时间', '-m', `下次运行: ${nextStr} UTC`, '-m', `续期后到期: ${afterExpiresAt}`]);
+    await run(['remote', 'set-url', 'origin', `https://x-access-token:${CFG.ghToken}@github.com/${owner}/${repo}.git`]);
+    await run(['push']);
+    log('✅ cron 回写已 push');
+    return true;
+  } catch (e) {
+    log(`⚠️ cron 回写 push 失败（本次续期不受影响）: ${String(e.message).slice(0, 200)}`);
+    return false;
+  }
+}
+
+/**
  * 单个服务器续期（can_renew=true 时才进）。
  * 真实续期按钮选择器待补录确认，当前用文案泛匹配。
  */
@@ -639,6 +690,12 @@ async function reportResults(results) {
   await context.storageState({ path: path.join(CFG.shotDir, 'storage-state-final.json') }).catch(() => {});
   await browser.close();
   log('🏁 浏览器已关闭');
+
+  // 续期成功后回写 cron（oyz/FreezeHost 式自我调度，多服取最早到期）
+  const okExpires = results
+    .filter((r) => r.status === 'SUCCESS' && r.after && !['?', '-', '未读取到'].includes(r.after))
+    .map((r) => Date.parse(r.after)).filter(Number.isFinite);
+  if (okExpires.length) await updateCronSchedule(new Date(Math.min(...okExpires)).toISOString());
 
   await reportResults(results);
 })().catch(async (e) => {

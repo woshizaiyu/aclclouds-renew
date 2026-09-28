@@ -17,7 +17,7 @@
 | `ACL_PASSWORD` | ✅*1 | 账号密码 | `***` |
 | `SERVER_PAGE_URL` | ✅ | 服务器页完整 URL，多个换行/逗号分隔 | `https://aclclouds.com/server/YOUR_SERVER_ID` |
 | `SERVER_ID` | ❌ | 仅服务器 ID，自动拼接 | `YOUR_SERVER_ID` |
-| `GH_TOKEN` | ❌ | 回写 `AUTH_STATE` 用（classic PAT） | `ghp_xxx` |
+| `GH_TOKEN` | ❌ | 回写 `AUTH_STATE` + cron 自我调度用（classic PAT，需勾 `repo` + `workflow`；默认 `GITHUB_TOKEN` 推不了 workflow 文件） | `ghp_xxx` |
 | `TG_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:AAA-xxx` |
 | `TG_CHAT_ID` | ❌ | 接收通知 Chat ID | `123456789` |
 | `NODE_LINK` | ❌ | 代理节点（vless/hy2/vmess/trojan/tuic/anytls/socks5），配了则 workflow 起 sing-box，走 `socks5://127.0.0.1:1080`；不通自动直连 | `vless://...` |
@@ -41,7 +41,7 @@
 
 1. 新建 GitHub 仓库，把本目录文件推上去（勿提交录制文件，见 `.gitignore`）。
 2. Settings → Secrets and variables → Actions 配好上表 Secrets。
-3. Actions 启用工作流，手动跑一次看日志。巡检每 12 小时一次（`renew.yml` cron）。
+3. Actions 启用工作流，手动跑一次看日志。首次为 24h 巡检（`renew.yml` cron `10 10 * * *`）；续期成功后脚本按 `expires_at-1天` 自动改写 cron 并 push（oyz/FreezeHost 式自我调度），下次到期前才唤醒。
 
 ## 本地调试
 
