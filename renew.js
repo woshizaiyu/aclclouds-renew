@@ -14,8 +14,8 @@
  *    认证 : session-cookie (remember_web_* + __Host-aclclouds_session + XSRF-TOKEN,
  *      API 请求头 X-XSRF-TOKEN = decodeURIComponent(XSRF-TOKEN cookie))
  *  主路线 : API 预检 (can_renew=false 直接 SKIP 免开浏览器) +
- *           到期才开浏览器点 Renew（真实续期按钮选择器待 can_renew=true 时补录确认，
- *           当前用文案泛匹配 Renew/Confirm/Yes）。
+ *           到期才开浏览器点 Renew（录制 30e6ef2f 已确认：Renew → 403 captcha_required →
+ *           点弹窗内 <cap-widget> 解算 → 前端带 captcha_token 自动重试 renew → 200）。
  *  注意   : 目录下旧 app.py/README/workflow 是 katabump 残留，已废弃，勿用。
  *
  *  必填环境变量（二选一提供凭证）:
@@ -415,7 +415,12 @@ async function updateCronSchedule(afterExpiresAt) {
 
 /**
  * 单个服务器续期（can_renew=true 时才进）。
- * 真实续期按钮选择器待补录确认，当前用文案泛匹配。
+ * 录制 30e6ef2f（dashboard/projects）已确认真实流程：点 Renew →
+ * POST /api/client/servers/<id>/upgrade/renew 先回 403 captcha_required →
+ * 弹窗 Anti-bot confirmation 内点 <cap-widget>（Cap.js，约6s 解算）→
+ * POST cap.aclclouds.com/<sk>/redeem 取 token →
+ * 前端自动带 {captcha_token: "<sk>:...:..."} 重试 renew → 200，expires_at 延后4天。
+ * 故弹窗里必须点 cap-widget（"Verify you're human"），点 Confirm/Yes 无效。
  */
 async function renewOneServer(context, url, idx, total, liveState) {
   const page = await context.newPage();
@@ -456,8 +461,9 @@ async function renewOneServer(context, url, idx, total, liveState) {
     }
     await sleep(2000);
 
-    // 确认弹窗（若有）：先枚举弹窗内按钮并打文案，再启发式点确认
+    // 确认弹窗（Anti-bot confirmation + Cap.js）：必须点 cap-widget，点 Confirm/Yes 无效
     const modal = page.locator('[role="dialog"], div.modal.show, .modal, [class*="modal"]').last();
+    let capClicked = false;
     try {
       await modal.waitFor({ state: 'visible', timeout: 8000 });
       log('🪟 已探测到确认弹窗');
@@ -474,12 +480,35 @@ async function renewOneServer(context, url, idx, total, liveState) {
           }
         } catch { /* ignore */ }
       }
+      // cap-widget 是自定义元素，不在上面的 button/a 选择器里，单独枚举
+      try {
+        const capCount = await modal.locator('cap-widget, .auth-cap-widget').count();
+        if (capCount) labels.push("Verify you're human", 'Cap');
+      } catch { /* ignore */ }
       log(`📝 弹窗按钮: ${labels.length ? JSON.stringify(labels) : '（空）'}`);
       await safeShot(page, `server-${idx}-modal.png`);
-      const ok = await clickByText(modal, ['Renew', 'Confirm', 'Yes', 'Continue', 'Submit', 'OK'], { timeout: 1200 });
-      if (!ok) await clickByText(page.locator('body'), ['Confirm', 'Yes', 'OK'], { timeout: 1000 }).catch(() => false);
+      // 优先点 cap-widget（录制选择器 div.auth-cap-widget > cap-widget）
+      for (const c of [modal.locator('cap-widget').first(), page.locator('.auth-cap-widget cap-widget').first(), page.locator('cap-widget').first()]) {
+        try {
+          await c.waitFor({ state: 'visible', timeout: 3000 });
+          await c.click({ timeout: 8000 });
+          capClicked = true;
+          log('👆 已点击 cap-widget，等待解算…');
+          break;
+        } catch { /* 换下一个候选 */ }
+      }
+      if (!capClicked) capClicked = await clickByText(modal, ["Verify you're human", 'Verify'], { timeout: 1500 });
+      if (capClicked) {
+        // Cap 解算约6s（录制 8.2s→13.8s），等 Solved 文案最多30s；等不到也继续轮询后端
+        try {
+          await page.getByText("You're human", { exact: false }).first().waitFor({ state: 'visible', timeout: 30000 });
+          log('✅ Cap 已解算 (You\'re human)');
+        } catch { log('ℹ️ 未探测到 Solved 文案，继续轮询后端'); }
+      } else {
+        const ok = await clickByText(modal, ['Renew', 'Confirm', 'Yes', 'Continue', 'Submit', 'OK'], { timeout: 1200 });
+        if (!ok) await clickByText(page.locator('body'), ['Confirm', 'Yes', 'OK'], { timeout: 1000 }).catch(() => false);
+      }
     } catch { log('ℹ️ 无独立确认弹窗，继续'); }
-    await sleep(5000);
 
     // 读页面 alert 判结果
     const alert = await page.evaluate(() => {
@@ -489,8 +518,12 @@ async function renewOneServer(context, url, idx, total, liveState) {
     if (alert) log(`📩 页面提示: ${alert}`);
     const low = alert.toLowerCase();
 
-    // 独立复核：重读 detail，expires_at 变化即成功
-    const after = await apiServerDetail(id, liveState);
+    // 独立复核：Cap 解算 + 前端自动重试 renew 需要时间，每5s 重读 detail，最长90s
+    let after = await apiServerDetail(id, liveState);
+    for (let i = 0; i < 18 && !(before.ok && after.ok && before.expires_at && after.expires_at && before.expires_at !== after.expires_at) && !/renewed|success|extended/.test(low); i++) {
+      await sleep(5000);
+      after = await apiServerDetail(id, liveState);
+    }
     result.after = after.ok ? (after.expires_at || '?') : '未读取到';
     log(`🔍 复核: ${result.before} ➔ ${result.after}`);
     await safeShot(page, `server-${idx}-verify.png`);
@@ -505,7 +538,7 @@ async function renewOneServer(context, url, idx, total, liveState) {
       log(`⏳ ${result.note}`);
     } else {
       result.status = 'FAIL';
-      result.note = alert ? `点击完成但未确认: ${alert}` : '点击完成但时长未变化（需补录确认选择器）';
+      result.note = alert ? `点击完成但未确认: ${alert}` : '点击完成但时长未变化（cap-widget 可能未解算成功）';
       await safeShot(page, `server-${idx}-fail.png`);
       log('❌ 后端未入账或无法确认');
     }
