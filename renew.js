@@ -81,6 +81,22 @@ const nowStr = () => new Date().toLocaleString('zh-CN', { hour12: false });
 const log = (...a) => console.log(`[${nowStr()}]`, ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 北京时间（佬王同款：UTC+8，YYYY-MM-DD HH:mm:ss，不依赖 runner 时区） */
+const bjTime = () => new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
+/** 当前出口 IP（直连裸请求；失败返回'获取失败'，不阻塞主流程） */
+function getCurrentIp(ms = 15000) {
+  return new Promise((resolve) => {
+    const req = https.get('https://api.ip.sb/ip', { timeout: ms }, (r) => {
+      let buf = '';
+      r.on('data', (c) => (buf += c));
+      r.on('end', () => resolve(r.statusCode === 200 ? buf.trim() : '获取失败'));
+    });
+    req.on('error', () => resolve('获取失败'));
+    req.on('timeout', () => { req.destroy(); resolve('获取失败'); });
+  });
+}
+
 /** 解析目标服务器列表：完整 URL 或裸 ID */
 function parseTargets() {
   const raw = [env('SERVER_PAGE_URL'), env('SERVER_ID')].filter(Boolean).join('\n');
@@ -580,27 +596,30 @@ async function doLogin(page) {
 
 /* ============================== 汇报 ============================== */
 
-/** TG 报告（佬王 HidenCloud 风格）：标题 + 状态 + 账号 + 前后到期时间 */
-async function reportResults(results) {
+/** TG 报告（佬王同款 eooce 风：标题 + 状态 + 脱敏账号 + 前后到期 + IP + 北京时间） */
+async function reportResults(results, currentIp = '未知') {
   results.sort((a, b) => a.idx - b.idx);
   const STATUS = { SUCCESS: '✅ 续期成功', PENDING: '⏳ 未到续期时间', NO_BUTTON: '❌ 未找到按钮', FAIL: '❌ 续期失败' };
   const ICON = { SUCCESS: '🟢', PENDING: '⚪', NO_BUTTON: '🟡', FAIL: '🔴' };
-  const lines = ['🎰 ACLClouds 续期报告', ''];
+  const HIDE_DATE = new Set(['?', '-', '未读取到', '', null, undefined]);
+  const lines = ['🎉 ACLClouds 续期通知', ''];
   for (const r of results) {
     lines.push(STATUS[r.status] || r.status);
-    lines.push(`📧 账号: ${maskEmail()}`);
+    lines.push(`👤 账号: ${maskEmail()}`);
     lines.push(`🖥 服务器: ${r.id}`);
-    if (r.before) lines.push(`⏱ 续期前到期时间:${r.before}`);
-    if (r.after) lines.push(`⏱ 续期后到期时间:${r.after}`);
-    if (r.note) lines.push(`📝 ${r.note}`);
+    if (!HIDE_DATE.has(r.before)) lines.push(`📅 续期前到期：${r.before}`);
+    if (!HIDE_DATE.has(r.after)) lines.push(`📅 续期后到期：${r.after}`);
+    // 内部 note（如 can_renew=false(…)/expires_at 已更新）不再展示；仅失败时保留简短原因
+    if ((r.status === 'FAIL' || r.status === 'NO_BUTTON') && r.note) lines.push(`📝 ${String(r.note).slice(0, 120)}`);
     lines.push('');
   }
-  lines.push(`⏱ 时间: ${nowStr()}`);
+  lines.push(`🌐 续期使用IP: ${currentIp}`);
+  lines.push(`🕒 续期时间：${bjTime()}`);
   await sendTelegram(lines.join('\n'));
   console.log('\n================ 汇总 ================');
   results.forEach((r) => console.log(`${ICON[r.status]} [${r.idx}/${r.total}] ${r.id} ${r.before}${r.after ? ' ➔ ' + r.after : ''} ${r.note}`));
-  const fails = results.filter((r) => r.status === 'FAIL').length;
-  process.exitCode = fails && fails === results.length ? 1 : 0;
+  // 失败只走 TG 通知感知，工作流一律绿色（exit 0），避免红灯打扰
+  process.exitCode = 0;
 }
 
 /* ============================== 主流程 ============================== */
@@ -645,6 +664,9 @@ async function reportResults(results) {
   } else { log('🍭 直连模式（未配置 NODE_LINK 则 workflow 不起 sing-box）'); }
   if (CFG.channel) launchOpts.channel = CFG.channel;
 
+  const currentIp = await getCurrentIp();
+  log(`🎯 当前出口IP: ${currentIp}`);
+
   // 1) API 预检优先：can_renew=false 直接汇报退出，不启动浏览器
   const results = [];
   let browserTargets = targets.map((url, i) => ({ url, idx: i + 1 }));
@@ -664,7 +686,7 @@ async function reportResults(results) {
     browserTargets = remain;
     if (!browserTargets.length) {
       log('✅ 全部未到期，本次免开浏览器');
-      await reportResults(results);
+      await reportResults(results, currentIp);
       return;
     }
   }
@@ -730,9 +752,10 @@ async function reportResults(results) {
     .map((r) => Date.parse(r.after)).filter(Number.isFinite);
   if (okExpires.length) await updateCronSchedule(new Date(Math.min(...okExpires)).toISOString());
 
-  await reportResults(results);
+  await reportResults(results, currentIp);
 })().catch(async (e) => {
   console.error('❌ 全局致命错误:', e.message);
-  await sendTelegram(`🚨 ACLClouds 运行异常\n${String(e.message).slice(0, 200)}\n⏱ ${nowStr()}`);
-  process.exit(1);
+  const ip = await getCurrentIp();
+  await sendTelegram(['🎉 ACLClouds 续期通知', '', '❌ 运行异常', `👤 账号: ${maskEmail()}`, `🌐 续期使用IP: ${ip}`, `🕒 续期时间：${bjTime()}`, `📝 ${String(e.message).slice(0, 200)}`].join('\n'));
+  process.exit(0); // 同上：异常（登录失败等）也只走 TG 通知，保持绿色
 });
